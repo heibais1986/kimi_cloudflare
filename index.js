@@ -72,16 +72,25 @@ async function chatHandler(req, env) {
 
             if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta) {
               const delta = parsed.choices[0].delta;
-              token = delta.reasoning_content || delta.content || "";
+              // 区分 reasoning_content 和 content
+              if (delta.reasoning_content) {
+                token = delta.reasoning_content;
+                fullResponse += token;
+                await writer.write(
+                  encoder.encode(`data: ${JSON.stringify({ type: 'reasoning', content: token })}\n\n`)
+                );
+              } else if (delta.content) {
+                token = delta.content;
+                fullResponse += token;
+                await writer.write(
+                  encoder.encode(`data: ${JSON.stringify({ type: 'content', content: token })}\n\n`)
+                );
+              }
             } else if (parsed.response) {
               token = parsed.response;
-            }
-
-            if (token) {
               fullResponse += token;
-              // 转发给前端（统一成简单格式）
               await writer.write(
-                encoder.encode(`data: ${JSON.stringify({ response: token })}\n\n`)
+                encoder.encode(`data: ${JSON.stringify({ type: 'content', content: token })}\n\n`)
               );
             }
           }
@@ -266,6 +275,67 @@ body {
 .ai a { color: #58a6ff; }
 .ai img { max-width: 100%; border-radius: 6px; }
 
+/* 推理内容样式 */
+.reasoning-container {
+  margin: 8px 0;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  background: #252525;
+  overflow: hidden;
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: #2a2a2a;
+  border-bottom: 1px solid #3a3a3a;
+  transition: background 0.2s;
+}
+
+.reasoning-header:hover {
+  background: #303030;
+}
+
+.reasoning-icon {
+  margin-right: 8px;
+  font-size: 14px;
+  transition: transform 0.2s;
+}
+
+.reasoning-container.collapsed .reasoning-icon {
+  transform: rotate(-90deg);
+}
+
+.reasoning-title {
+  font-size: 13px;
+  color: #999;
+  font-weight: 500;
+}
+
+.reasoning-content {
+  padding: 12px;
+  color: #888;
+  font-size: 14px;
+  line-height: 1.5;
+  opacity: 0.85;
+  max-height: 500px;
+  overflow-y: auto;
+  transition: max-height 0.3s ease;
+}
+
+.reasoning-container.collapsed .reasoning-content {
+  max-height: 0;
+  padding: 0 12px;
+  overflow: hidden;
+}
+
+.reasoning-content p { margin: 0.5em 0; color: #888; }
+.reasoning-content p:first-child { margin-top: 0; }
+.reasoning-content p:last-child { margin-bottom: 0; }
+
 .loading::after {
   content: "";
   display: inline-block;
@@ -407,7 +477,12 @@ async function sendMessage() {
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ""
-    let mdText = ""   // 累积原始 Markdown 文本
+    let reasoningText = ""   // 推理内容
+    let contentText = ""     // 正式内容
+    let reasoningContainer = null
+    let reasoningContentDiv = null
+    let contentContainer = null
+    
     aiBox.innerHTML = ""
     aiBox.classList.remove("loading")
 
@@ -427,25 +502,74 @@ async function sendMessage() {
 
           try {
             const parsed = JSON.parse(dataStr)
-            let token = ""
-            if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta) {
-              const delta = parsed.choices[0].delta
-              if (delta.reasoning_content) token = delta.reasoning_content
-              else if (delta.content) token = delta.content
-            } else if (parsed.response) token = parsed.response
-
-            if (token) {
-              mdText += token
-              aiBox.innerHTML = marked.parse(mdText)
-              addCopyButtons(aiBox)
+            
+            // 处理新格式：区分 type
+            if (parsed.type === 'reasoning' && parsed.content) {
+              reasoningText += parsed.content
+              
+              // 创建推理容器（如果还没有）
+              if (!reasoningContainer) {
+                reasoningContainer = document.createElement("div")
+                reasoningContainer.className = "reasoning-container collapsed"
+                reasoningContainer.innerHTML = \`
+                  <div class="reasoning-header">
+                    <span class="reasoning-icon">▼</span>
+                    <span class="reasoning-title">思考过程</span>
+                  </div>
+                  <div class="reasoning-content"></div>
+                \`
+                aiBox.appendChild(reasoningContainer)
+                
+                reasoningContentDiv = reasoningContainer.querySelector(".reasoning-content")
+                
+                // 添加折叠/展开功能
+                reasoningContainer.querySelector(".reasoning-header").onclick = () => {
+                  reasoningContainer.classList.toggle("collapsed")
+                }
+              }
+              
+              // 更新推理内容
+              reasoningContentDiv.innerHTML = marked.parse(reasoningText)
+              chat.scrollTop = chat.scrollHeight
+              
+            } else if (parsed.type === 'content' && parsed.content) {
+              contentText += parsed.content
+              
+              // 创建内容容器（如果还没有）
+              if (!contentContainer) {
+                contentContainer = document.createElement("div")
+                contentContainer.className = "content-container"
+                aiBox.appendChild(contentContainer)
+              }
+              
+              // 更新正式内容
+              contentContainer.innerHTML = marked.parse(contentText)
+              addCopyButtons(contentContainer)
+              chat.scrollTop = chat.scrollHeight
+              
+            } else if (parsed.response) {
+              // 兼容旧格式
+              contentText += parsed.response
+              if (!contentContainer) {
+                contentContainer = document.createElement("div")
+                contentContainer.className = "content-container"
+                aiBox.appendChild(contentContainer)
+              }
+              contentContainer.innerHTML = marked.parse(contentText)
+              addCopyButtons(contentContainer)
               chat.scrollTop = chat.scrollHeight
             }
           } catch(e) {
-            // 解析失败时，直接把原始数据当文本追加
+            // 解析失败时，直接把原始数据当文本追加到内容区
             if (dataStr && dataStr !== "[DONE]") {
-              mdText += dataStr
-              aiBox.innerHTML = marked.parse(mdText)
-              addCopyButtons(aiBox)
+              contentText += dataStr
+              if (!contentContainer) {
+                contentContainer = document.createElement("div")
+                contentContainer.className = "content-container"
+                aiBox.appendChild(contentContainer)
+              }
+              contentContainer.innerHTML = marked.parse(contentText)
+              addCopyButtons(contentContainer)
               chat.scrollTop = chat.scrollHeight
             }
           }
