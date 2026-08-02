@@ -1,11 +1,15 @@
 name = "kimi-cloudflare"
 main = "index.js"
-compatibility_date = "2026-04-21"
+compatibility_date = "2026-06-25"
 
-[env]
-[[AI]]
+[ai]
 binding = "AI"
 
 [[kv_namespaces]]
 binding = "CONVERSATIONS"
-id = "794e0c7f29854069885dab4508629b04"
+id = "95084f10418f44e48b0cef53ffca5fab"
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+

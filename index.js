@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
     if (url.pathname === "/") {
@@ -9,7 +9,7 @@ export default {
     }
 
     if (url.pathname === "/api/chat") {
-      return chatHandler(request, env)
+      return chatHandler(request, env, ctx)
     }
 
     return new Response("404", { status: 404 })
@@ -17,7 +17,7 @@ export default {
 }
 
 async function chatHandler(req, env) {
-  const { message, userId } = await req.json();
+  const { message, userId, model } = await req.json();
   const key = `chat:${userId}`;
 
   let history = (await env.CONVERSATIONS.get(key, { type: "json" })) || [];
@@ -33,14 +33,12 @@ async function chatHandler(req, env) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
     },
   });
 
-  // 后台处理 AI 流
   (async () => {
     try {
-      const aiStream = await env.AI.run("@cf/moonshotai/kimi-k2.6", {
+      const aiStream = await env.AI.run(model || "@cf/moonshotai/kimi-k2.7-code", {
         messages: history,
         stream: true,
         max_tokens: 4096,
@@ -48,69 +46,57 @@ async function chatHandler(req, env) {
 
       const reader = aiStream.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        // 正确解码这一块数据
-        const chunkText = decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-        // === 关键：解析 OpenAI 格式的 chunk ===
-        let token = "";
-        try {
-          // 有些 chunk 是纯 JSON，有些可能是多个 data 混在一起，这里简单处理
-          const lines = chunkText.split("\n");
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
 
-            const dataStr = trimmed.slice(6).trim();
-            if (dataStr === "[DONE]" || dataStr === "") continue;
+          const dataStr = trimmed.slice(6).trim();
+          if (dataStr === "[DONE]" || dataStr === "") continue;
 
+          try {
             const parsed = JSON.parse(dataStr);
 
-            if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta) {
+            let token = "";
+            let type = "content";
+
+            if (parsed.choices?.[0]?.delta) {
               const delta = parsed.choices[0].delta;
-              // 区分 reasoning_content 和 content
               if (delta.reasoning_content) {
                 token = delta.reasoning_content;
-                fullResponse += token;
-                await writer.write(
-                  encoder.encode(`data: ${JSON.stringify({ type: 'reasoning', content: token })}\n\n`)
-                );
+                type = "reasoning";
               } else if (delta.content) {
                 token = delta.content;
-                fullResponse += token;
-                await writer.write(
-                  encoder.encode(`data: ${JSON.stringify({ type: 'content', content: token })}\n\n`)
-                );
               }
             } else if (parsed.response) {
               token = parsed.response;
+            }
+
+            if (token) {
               fullResponse += token;
               await writer.write(
-                encoder.encode(`data: ${JSON.stringify({ type: 'content', content: token })}\n\n`)
+                encoder.encode(`data: ${JSON.stringify({ type, content: token })}\n\n`)
               );
             }
-          }
-        } catch (parseErr) {
-          // 如果解析失败，直接尝试把原始文本发出去（保底）
-          if (chunkText.trim()) {
-            fullResponse += chunkText;
-            await writer.write(
-              encoder.encode(`data: ${JSON.stringify({ response: chunkText })}\n\n`)
-            );
-          }
+          } catch {}
         }
       }
 
-      // 保存历史对话
-      history.push({ role: "assistant", content: fullResponse });
-      await env.CONVERSATIONS.put(key, JSON.stringify(history), {
-        expirationTtl: 86400,
-      });
-
+      if (fullResponse) {
+        history.push({ role: "assistant", content: fullResponse });
+        await env.CONVERSATIONS.put(key, JSON.stringify(history), {
+          expirationTtl: 86400,
+        });
+      }
     } catch (err) {
       console.error("AI stream error:", err);
       try {
@@ -119,9 +105,7 @@ async function chatHandler(req, env) {
         );
       } catch (e) {}
     } finally {
-      try {
-        await writer.close();
-      } catch (e) {}
+      try { await writer.close(); } catch (e) {}
     }
   })();
 
@@ -422,11 +406,33 @@ button:active {
   background: #0062cc;
 }
 
+#model-select {
+  padding: 8px 12px;
+  border: 1px solid #444;
+  border-radius: 20px;
+  font-size: 13px;
+  outline: none;
+  background: #1e1e1e;
+  color: #ccc;
+  cursor: pointer;
+  max-width: 180px;
+}
+
+#model-select:hover {
+  border-color: #666;
+}
+
+#model-select option {
+  background: #2c2c2c;
+  color: #eee;
+}
+
 @media (max-width: 768px) {
   #chat { padding: 12px 8px; }
   .msg { max-width: 92%; padding: 11px 14px; font-size: 15.5px; }
   #bar { padding: 8px 10px; }
   #input { padding: 13px 16px; }
+  #model-select { max-width: 120px; font-size: 12px; }
 }
 
 @media (max-width: 480px) { .msg { max-width: 95%; } }
@@ -438,6 +444,18 @@ button:active {
 <div id="chat"></div>
 
 <div id="bar">
+<select id="model-select">
+<option value="@cf/moonshotai/kimi-k2.7-code">Kimi K2.7 Code</option>
+<option value="@cf/moonshotai/kimi-k2.6">Kimi K2.6</option>
+<option value="@cf/meta/llama-3.1-8b-instruct">Llama 3.1 8B</option>
+<option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.2 3B</option>
+<option value="@cf/meta/llama-3.2-1b-instruct">Llama 3.2 1B</option>
+<option value="@cf/qwen/qwen1.5-7b-chat-awq">Qwen 1.5 7B</option>
+<option value="@cf/qwen/qwen3-30b-a3b-fp8">Qwen3 30B</option>
+<option value="@cf/zai-org/glm-4.7-flash">GLM-4.7 Flash</option>
+<option value="@cf/mistralai/mistral-small-3.1-24b-instruct">Mistral Small 3.1</option>
+<option value="@hf/mistral/mistral-7b-instruct-v0.2">Mistral 7B v0.2</option>
+</select>
 <input id="input" placeholder="输入消息...">
 <button onclick="sendMessage()">发送</button>
 </div>
@@ -526,7 +544,7 @@ async function sendMessage() {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, userId: userId })
+      body: JSON.stringify({ message: text, userId: userId, model: document.getElementById("model-select").value })
     })
 
     if (!res.ok) {
