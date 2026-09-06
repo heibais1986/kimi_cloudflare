@@ -1,6 +1,6 @@
 # Kimi on Cloudflare Workers
 
-利用 Cloudflare 每天提供的免费 Worker AI 额度，免费使用 Kimi K2.6 模型。
+利用 Cloudflare 每天提供的免费 Worker AI 额度，免费使用 GLM-4.7、GPT-OSS 等开源模型。
 
 ## 一键部署
 
@@ -62,5 +62,5 @@ wrangler deploy
 ## 技术栈
 
 - Cloudflare Workers
-- Cloudflare Worker AI (`@cf/moonshotai/kimi-k2.6`)
+- Cloudflare Worker AI（默认 `@cf/zai-org/glm-4.7-flash`，免费计划可用；kimi-k2.6/k2.7-code、glm-5.3-flash、deepseek-v4 等已需付费计划）
 - Cloudflare KV（对话历史存储）

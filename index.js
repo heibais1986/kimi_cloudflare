@@ -46,7 +46,7 @@ async function chatHandler(req, env, ctx) {
 
   (async () => {
     try {
-      const aiStream = await env.AI.run(model || "@cf/moonshotai/kimi-k2.7-code", {
+      const aiStream = await env.AI.run(model || "@cf/zai-org/glm-4.7-flash", {
         messages: history,
         stream: true,
         max_tokens: 4096,
@@ -109,10 +109,11 @@ async function chatHandler(req, env, ctx) {
         );
       }
     } catch (err) {
-      console.error("AI stream error:", err);
+      const detail = err?.message || String(err);
+      console.error("AI stream error:", detail, err?.stack);
       try {
         await writer.write(
-          encoder.encode(`data: ${JSON.stringify({ type: "error", content: "AI 生成出错" })}\n\n`)
+          encoder.encode(`data: ${JSON.stringify({ type: "error", content: "AI 生成出错: " + detail })}\n\n`)
         );
       } catch (e) {}
     } finally {
@@ -456,17 +457,15 @@ button:active {
 
 <div id="bar">
 <select id="model-select">
-<option value="@cf/moonshotai/kimi-k2.7-code">Kimi K2.7 Code</option>
-<option value="@cf/moonshotai/kimi-k2.6">Kimi K2.6</option>
+<option value="@cf/zai-org/glm-4.7-flash" selected>GLM-4.7 Flash</option>
+<option value="@cf/openai/gpt-oss-120b">GPT-OSS 120B</option>
+<option value="@cf/meta/llama-3.3-70b-instruct-fp8-fast">Llama 3.3 70B</option>
+<option value="@cf/qwen/qwen3-30b-a3b-fp8">Qwen3 30B</option>
 <option value="@cf/meta/llama-3.1-8b-instruct-fast">Llama 3.1 8B Fast</option>
 <option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.2 3B</option>
 <option value="@cf/meta/llama-3.2-1b-instruct">Llama 3.2 1B</option>
-<option value="@cf/meta/llama-3.3-70b-instruct-fp8-fast">Llama 3.3 70B</option>
-<option value="@cf/qwen/qwen3-30b-a3b-fp8">Qwen3 30B</option>
-<option value="@cf/zai-org/glm-4.7-flash">GLM-4.7 Flash</option>
-<option value="@cf/zai-org/glm-5.3-flash">GLM-5.3 Flash</option>
-<option value="@cf/openai/gpt-oss-120b">GPT-OSS 120B</option>
 <option value="@cf/mistralai/mistral-small-3.1-24b-instruct">Mistral Small 3.1</option>
+<!-- 以下模型需要 Workers 付费计划，免费账户调用会报错：kimi-k2.6 / kimi-k2.7-code / glm-5.3-flash / deepseek-v4 -->
 </select>
 <input id="input" placeholder="输入消息...">
 <button onclick="sendMessage()">发送</button>
