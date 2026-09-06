@@ -656,7 +656,7 @@ async function sendMessage() {
                 contentContainer.className = "content-container"
                 aiBox.appendChild(contentContainer)
               }
-              contentText += (contentText ? "\n\n" : "") + "<em>[" + (parsed.content || "发生错误") + "]</em>"
+              contentText += (contentText ? "\\n\\n" : "") + "<em>[" + (parsed.content || "发生错误") + "]</em>"
               contentContainer.innerHTML = render(contentText)
             } else if (parsed.response) {
               // 兼容旧格式
