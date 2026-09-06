@@ -5,7 +5,7 @@
 ## 一键部署
 
 ```bash
-npm install -g wrangler && wrangler login && wrangler kv:namespace create CONVERSATIONS
+npm install -g wrangler && wrangler login && wrangler kv namespace create CONVERSATIONS
 ```
 
 将返回的 KV ID 填入 `wrangler.toml`，然后：
@@ -38,7 +38,7 @@ wrangler login
 3. 创建 KV 命名空间：
 
 ```bash
-wrangler kv:namespace create CONVERSATIONS
+wrangler kv namespace create CONVERSATIONS
 ```
 
 4. 将 KV 命名空间 ID 填入 `wrangler.toml`：

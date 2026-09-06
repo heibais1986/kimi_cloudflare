@@ -11,17 +11,25 @@ export default {
     if (url.pathname === "/api/chat") {
       return chatHandler(request, env, ctx)
     }
-
     return new Response("404", { status: 404 })
   }
 }
 
-async function chatHandler(req, env) {
-  const { message, userId, model } = await req.json();
+async function chatHandler(req, env, ctx) {
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+
+  const { message, userId, model } = await req.json().catch(() => ({}));
+  if (typeof message !== "string" || !message.trim() || typeof userId !== "string" || !userId) {
+    return new Response("Bad Request", { status: 400 });
+  }
+
   const key = `chat:${userId}`;
 
   let history = (await env.CONVERSATIONS.get(key, { type: "json" })) || [];
   history.push({ role: "user", content: message });
+  history = history.slice(-20);
 
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
@@ -82,7 +90,8 @@ async function chatHandler(req, env) {
             }
 
             if (token) {
-              fullResponse += token;
+              // 推理内容只用于前端展示，不存入对话历史
+              if (type !== "reasoning") fullResponse += token;
               await writer.write(
                 encoder.encode(`data: ${JSON.stringify({ type, content: token })}\n\n`)
               );
@@ -93,15 +102,17 @@ async function chatHandler(req, env) {
 
       if (fullResponse) {
         history.push({ role: "assistant", content: fullResponse });
-        await env.CONVERSATIONS.put(key, JSON.stringify(history), {
-          expirationTtl: 86400,
-        });
+        ctx.waitUntil(
+          env.CONVERSATIONS.put(key, JSON.stringify(history), {
+            expirationTtl: 86400,
+          })
+        );
       }
     } catch (err) {
       console.error("AI stream error:", err);
       try {
         await writer.write(
-          encoder.encode(`data: ${JSON.stringify({ error: "AI 生成出错" })}\n\n`)
+          encoder.encode(`data: ${JSON.stringify({ type: "error", content: "AI 生成出错" })}\n\n`)
         );
       } catch (e) {}
     } finally {
@@ -447,25 +458,37 @@ button:active {
 <select id="model-select">
 <option value="@cf/moonshotai/kimi-k2.7-code">Kimi K2.7 Code</option>
 <option value="@cf/moonshotai/kimi-k2.6">Kimi K2.6</option>
-<option value="@cf/meta/llama-3.1-8b-instruct">Llama 3.1 8B</option>
+<option value="@cf/meta/llama-3.1-8b-instruct-fast">Llama 3.1 8B Fast</option>
 <option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.2 3B</option>
 <option value="@cf/meta/llama-3.2-1b-instruct">Llama 3.2 1B</option>
-<option value="@cf/qwen/qwen1.5-7b-chat-awq">Qwen 1.5 7B</option>
+<option value="@cf/meta/llama-3.3-70b-instruct-fp8-fast">Llama 3.3 70B</option>
 <option value="@cf/qwen/qwen3-30b-a3b-fp8">Qwen3 30B</option>
 <option value="@cf/zai-org/glm-4.7-flash">GLM-4.7 Flash</option>
+<option value="@cf/zai-org/glm-5.3-flash">GLM-5.3 Flash</option>
+<option value="@cf/openai/gpt-oss-120b">GPT-OSS 120B</option>
 <option value="@cf/mistralai/mistral-small-3.1-24b-instruct">Mistral Small 3.1</option>
-<option value="@hf/mistral/mistral-7b-instruct-v0.2">Mistral 7B v0.2</option>
 </select>
 <input id="input" placeholder="输入消息...">
 <button onclick="sendMessage()">发送</button>
 </div>
 
-<!-- 在 body 结束前引入 marked -->
+<!-- 在 body 结束前引入 marked 和 DOMPurify -->
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 
 <script>
 const chat = document.getElementById("chat")
-const userId = Math.random().toString(36)
+// 持久化 userId，刷新页面后可继续同一份对话历史
+let userId = localStorage.getItem("userId")
+if (!userId) {
+  userId = Math.random().toString(36)
+  localStorage.setItem("userId", userId)
+}
+
+// 所有 Markdown 渲染都经过 DOMPurify，防止 XSS
+function render(md) {
+  return DOMPurify.sanitize(marked.parse(md))
+}
 
 function addCopyButtons(container) {
   container.querySelectorAll("pre").forEach(pre => {
@@ -523,7 +546,7 @@ function add(role, text="", loading=false) {
   div.className = "msg " + role
   if (loading) div.classList.add("loading")
   // 初始可以为空
-  div.innerHTML = text ? marked.parse(text) : ""
+  div.innerHTML = text ? render(text) : ""
   if (text) addCopyButtons(div)
   chat.appendChild(div)
   chat.scrollTop = chat.scrollHeight
@@ -608,7 +631,7 @@ async function sendMessage() {
               }
               
               // 更新推理内容
-              reasoningContentDiv.innerHTML = marked.parse(reasoningText)
+              reasoningContentDiv.innerHTML = render(reasoningText)
               chat.scrollTop = chat.scrollHeight
               
             } else if (parsed.type === 'content' && parsed.content) {
@@ -622,10 +645,19 @@ async function sendMessage() {
               }
               
               // 更新正式内容
-              contentContainer.innerHTML = marked.parse(contentText)
+              contentContainer.innerHTML = render(contentText)
               addCopyButtons(contentContainer)
               chat.scrollTop = chat.scrollHeight
               
+            } else if (parsed.type === 'error') {
+              // 服务端报告的错误，展示给用户
+              if (!contentContainer) {
+                contentContainer = document.createElement("div")
+                contentContainer.className = "content-container"
+                aiBox.appendChild(contentContainer)
+              }
+              contentText += (contentText ? "\n\n" : "") + "<em>[" + (parsed.content || "发生错误") + "]</em>"
+              contentContainer.innerHTML = render(contentText)
             } else if (parsed.response) {
               // 兼容旧格式
               contentText += parsed.response
@@ -634,7 +666,7 @@ async function sendMessage() {
                 contentContainer.className = "content-container"
                 aiBox.appendChild(contentContainer)
               }
-              contentContainer.innerHTML = marked.parse(contentText)
+              contentContainer.innerHTML = render(contentText)
               addCopyButtons(contentContainer)
               chat.scrollTop = chat.scrollHeight
             }
@@ -647,7 +679,7 @@ async function sendMessage() {
                 contentContainer.className = "content-container"
                 aiBox.appendChild(contentContainer)
               }
-              contentContainer.innerHTML = marked.parse(contentText)
+              contentContainer.innerHTML = render(contentText)
               addCopyButtons(contentContainer)
               chat.scrollTop = chat.scrollHeight
             }
